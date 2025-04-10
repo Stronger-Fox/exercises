@@ -24,7 +24,8 @@ def build(env, log):
     for name in badnames:
         newname = linter.id_fixup(name)
 
-        # TODO: add custom rename here
+        # apply custom renames
+        newname = linter.id_fixup_rename(newname)
 
         if not linter.id_lint(newname):
             rest.append(newname)

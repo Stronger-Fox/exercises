@@ -30,3 +30,34 @@ class Linter:
             id = id.replace('__', '_')
 
         return id
+    
+    @staticmethod
+    def id_fixup_rename(oldid: str) -> str:
+        replacements = {
+            'one_arm': '1arm',
+            'two_arm': '2arm',
+            'triceps': 'tricep',
+            'biceps': 'bicep',
+            'lateral': 'lat',
+            # 'barbell': 'bbell',
+            # 'dumbbell': 'dbell',
+            # 'kettlebell': 'kbell',
+            'smith_machine': 'smith',
+            # 'bent_over': 'bover',
+            # 'extended': 'ext',
+            # 'extension': 'ext',
+            # 'decline': 'decl',
+            # 'incline': 'incl',
+            # 'alternating': 'alt',
+            # 'isometric': 'iso',
+            # 'close_grip': 'cgrip',
+            # 'wide_grip': 'wgrip',
+            # 'reverse': 'rev',
+            # 'standing': 'std',
+            'v_bar': 'vbar'
+        }
+
+        name = oldid
+        for k, v in replacements.items():
+            name = name.replace(k, v)
+        return name

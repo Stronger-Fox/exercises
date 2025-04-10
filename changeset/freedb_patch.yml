@@ -1,86 +1,114 @@
+# Patches we apply to FreeDB exercises
+# if 'id' field is present, the exercise id (as well as directory name)
+# will be changed accordingly. Other fields represent direct replacements.
 # initial_id: { ... exercise data to patch ...}
+1arm_kettlebell_military_press_to_the_side:
+  id: 1arm_kettlebell_military_press
+  name: 'One-Arm Kettlebell Military Press'
+
 bent_over_dumbbell_rear_delt_raise_with_head_on_bench:
   id: head_supported_rear_delt_raise
+  name: 'Head-Supported Dumbbell Rear Delt Raise'
 
 decline_close_grip_bench_to_skull_crusher:
   # TODO: add more img
   id: decline_bench_to_skull_crusher
+  name: 'Decline Bench To Skull Crusher (Close Grip)'
 
-dumbbell_lying_one_arm_rear_lateral_raise:
-  id: dumbbell_lying_1arm_rear_lat_raise
-
-extended_range_one_arm_kettlebell_floor_press:
+extended_range_1arm_kettlebell_floor_press:
   id: extended_1arm_kettlebell_floor_press
 
 hyperextensions_with_no_hyperextension_bench:
   # TODO: rename json
-  id: flat_bench_hyperextension
+  id: flat_bench_hyperextensions
+  name: 'Flat Bench Hyperextensions'
 
 incline_dumbbell_bench_with_palms_facing_in:
-  id: incline_dumbbell_palm_in_bench
+  id: incline_dumbbell_palm_in_press
 
 kneeling_cable_crunch_with_alternating_oblique_twists:
-  id: kneeling_cable_crunch_with_obliques
+  id: kneeling_cable_crunch_with_twists
 
-lying_close_grip_barbell_triceps_extension_behind_the_head:
-  id: ''
+lying_close_grip_barbell_tricep_extension_behind_the_head:
+  id: lying_barbell_tricep_extension
+  name: 'Lying Barbell Tricep Extension (Close Grip)'
 
-lying_close_grip_barbell_triceps_press_to_chin:
-  id: ''
+lying_close_grip_barbell_tricep_press_to_chin:
+  id: lying_barbell_tricep_chin_press
+  name: 'Lying Barbell Tricep Chin Press (Close Grip)'
 
-one_arm_kettlebell_military_press_to_the_side:
-  id: ''
+palms_up_barbell_wrist_curl_over_a_bench:
+  id: barbell_bench_wrist_curl_palm_up
+  name: 'Barbell Wrist Curl Over A Bench (Palms-Up)'
 
-one_arm_pronated_dumbbell_triceps_extension:
-  id: ''
-
-one_arm_supinated_dumbbell_triceps_extension:
-  id: ''
-
-palms_down_dumbbell_wrist_curl_over_a_bench:
-  id: ''
-
-palms_up_dumbbell_wrist_curl_over_a_bench:
-  id: ''
-
-seated_bent_over_one_arm_dumbbell_triceps_extension:
-  id: ''
-
-seated_bent_over_two_arm_dumbbell_triceps_extension:
-  id: ''
-
-seated_close_grip_concentration_barbell_curl:
-  id: ''
-
-seated_one_arm_dumbbell_palms_down_wrist_curl:
-  id: ''
-
-seated_one_arm_dumbbell_palms_up_wrist_curl:
-  id: ''
-
-seated_two_arm_palms_up_low_pulley_wrist_curl:
-  id: ''
-
-standing_bent_over_one_arm_dumbbell_triceps_extension:
-  id: ''
-
-standing_bent_over_two_arm_dumbbell_triceps_extension:
-  id: ''
-
-standing_dumbbell_straight_arm_front_delt_raise_above_head:
-  id: ''
-
-standing_low_pulley_one_arm_triceps_extension:
-  id: ''
-
-standing_one_arm_dumbbell_curl_over_incline_bench:
-  id: ''
-
-standing_one_arm_dumbbell_triceps_extension:
-  id: ''
-
-standing_overhead_barbell_triceps_extension:
-  id: ''
+palms_down_wrist_curl_over_a_bench:
+  id: barbell_bench_wrist_curl_palm_down
+  name: 'Barbell Wrist Curl Over A Bench (Palms-Down)'
 
 standing_palms_up_barbell_behind_the_back_wrist_curl:
-  id: ''
+  id: behind_the_back_barbell_wrist_curl
+  name: 'Behind The Back Barbell Wrist Curl (Palms-Up)'
+
+# probably dumbbell and barbell variations need to be united
+palms_up_dumbbell_wrist_curl_over_a_bench:
+  id: dumbbell_bench_wrist_curl_palm_up
+  name: 'Dumbbell Wrist Curl Over A Bench (Palms-Up)'
+
+palms_down_dumbbell_wrist_curl_over_a_bench:
+  id: dumbbell_bench_wrist_curl_palm_down
+  name: 'Dumbbell Wrist Curl Over A Bench (Palms-Down)'
+
+seated_1arm_dumbbell_palms_up_wrist_curl:
+  id: seated_1arm_wrist_curl_palm_up
+  name: 'Seated One-Arm Wrist Curl (Palms-Up)'
+
+seated_1arm_dumbbell_palms_down_wrist_curl:
+  id: seated_1arm_wrist_curl_palm_down
+  name: 'Seated One-Arm Wrist Curl (Palms-Down)'
+
+seated_2arm_palms_up_low_pulley_wrist_curl:
+  # we need a palm-down or 2-in-1 version of this
+  id: seated_cable_wrist_curl_palm_up
+  name: 'Seated Cable Wrist Curl (Palms-Up)'
+
+seated_bent_over_1arm_dumbbell_tricep_extension:
+  id: seated_1arm_dumbbell_tricep_extension
+  name: 'Seated One-Arm Dumbbell Tricep Extension'
+
+seated_bent_over_2arm_dumbbell_tricep_extension:
+  id: seated_dumbbell_2arm_tricep_extension
+  name: 'Seated Two-Arm Dumbbell Tricep Extension'
+
+concentration_curls:
+  id: seated_concentration_curl
+  name: 'Seated Concentration Curl'
+
+standing_concentration_curl:
+  name: 'Standing Concentration Curl'
+
+seated_close_grip_concentration_barbell_curl:
+  id: seated_barbell_concentration_curl
+  name: 'Seated Barbell Concentration Curl (Close Grip)'
+
+standing_1arm_dumbbell_curl_over_incline_bench:
+  id: 1arm_dumbbell_curl_over_incline_bench
+
+standing_bent_over_1arm_dumbbell_tricep_extension:
+  id: bent_over_1arm_tricep_extension
+  name: 'Bent-Over One-Arm Tricep Extension'
+
+standing_bent_over_2arm_dumbbell_tricep_extension:
+  id: bent_over_2arm_tricep_extension
+  name: 'Bent-Over Two-Arm Tricep Extension'
+
+standing_dumbbell_straight_arm_front_delt_raise_above_head:
+  id: standing_overhead_front_delt_raise
+  name: 'Standing Overhead Front Delt Raise'
+
+standing_low_pulley_1arm_tricep_extension:
+  id: standing_cable_1arm_tricep_extension
+  name: 'Standing Cable One-Arm Tricep Extension'
+
+standing_overhead_barbell_tricep_extension:
+  id: standing_overhead_tricep_extension
+  name: 'Standing Overhead Tricep Extension'
