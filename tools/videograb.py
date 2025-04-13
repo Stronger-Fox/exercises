@@ -8,6 +8,7 @@ import json
 import pathlib as pth
 import shutil
 import subprocess as sp
+import sys
 import tempfile
 from yt_dlp import YoutubeDL as YDL
 
@@ -40,6 +41,11 @@ def prepare_args(dct: dict, *, prefixes=('-', None), kvseps=(None, '='), lstsep=
                 subvals = parse_level(v, level + 1)
                 for sv in subvals:
                     col += [k, sv] if kvsep is None else [k + kvsep + sv]
+
+                continue
+
+            if isinstance(v, str) and not v:        # empty string -> just the key
+                col += [k]
                 continue
 
             if not isinstance(v, str):  # assume something iterable -> join it
@@ -63,11 +69,14 @@ class VideoSpec:
     builddir: pth.Path
     metadata: dict | None = None    # @FIXME: avoid very long output via repr
     downloaded: pth.Path | None = None
+    info_downloaded: dict | None = None
+
+    is_log: bool = False
 
     _tmpdir: tempfile.TemporaryDirectory | None = field(default=None, repr=False)
 
     # Whether to overwrite files. Class-level default
-    OVERWRITE: bool = False
+    is_overwrite: bool = False
     # Template for json filenames
     META_JSON_TPL: str = '{name}.meta.json'
     # Downloaded file name
@@ -80,14 +89,14 @@ class VideoSpec:
         'print_format': 'json',     # we'll parse that
         'select_streams': 'v',      # all video streams
         'show_entries': {
-            'stream': ['width', 'height', 'avg_frame_rate', 'bit_rate'],
-            'format': ['bit_rate']
+            'stream': '',
+            'format': ''
         }
     }
 
     def __init__(self, url: str, outfile: pth.Path | str,
                  builddir: pth.Path | str | None = None,
-                 *, is_overwrite: bool | None = None):
+                 *, is_overwrite: bool | None = None, is_log: bool | None = None):
         """
         Args:
             url: Where to grab the video from
@@ -102,9 +111,16 @@ class VideoSpec:
             builddir = pth.Path(builddir)
             builddir.mkdir(exist_ok=True)       # create if doesn't exist
             self.builddir = builddir
+            
+            # set downloaded as well if found
+            dlpath = builddir.joinpath(self.downloaded_name)
+            if dlpath.exists():
+                self.downloaded = dlpath
 
         if is_overwrite is not None:    # otherwise use class-level default
-            self.OVERWRITE = is_overwrite
+            self.is_overwrite = is_overwrite
+        if is_log is not None:    # otherwise use class-level default
+            self.is_log = is_log
 
     @property
     def name(self):
@@ -135,7 +151,7 @@ class VideoSpec:
             field anyway. This allows to avoid double-querying.
         """
 
-        is_overwrite = is_overwrite if is_overwrite is not None else self.OVERWRITE
+        is_overwrite = is_overwrite if is_overwrite is not None else self.is_overwrite
         json_name = self.meta_json_name
         json_path = (self.builddir is not None and self.builddir.joinpath(json_name))
         
@@ -174,7 +190,7 @@ class VideoSpec:
                 download is performed and the object state gets filled from
                 the exising files.
         """
-        is_overwrite = is_overwrite if is_overwrite is not None else self.OVERWRITE
+        is_overwrite = is_overwrite if is_overwrite is not None else self.is_overwrite
 
         self._ensure_builddir()
         
@@ -197,26 +213,47 @@ class VideoSpec:
         self.downloaded = dlout
         return dlout, jsonout
     
-    @classmethod
-    def _ffprobe_wrap(cls, videofile: pth.Path | str):
+    # @TODO: extract into separate function
+    def _ffprobe_wrap(self, videofile: pth.Path | str, *,
+                      extra_args: dict = {}, is_log: bool = None):
         """A wrapper to call ffprobe and get information on the video file."""
-        videofile = pth.Path(video)
+        is_log = is_log if is_log is not None else self.is_log 
+
+        videofile = pth.Path(videofile)
         assert videofile.exists(), f'File {videofile} not found'
 
         # We need to use fully-qualified path to executable
         # per https://docs.python.org/3/library/subprocess.html#subprocess.Popen
         ffprobe = self.FFPROBE_PATH
-        bin = shutil.which(ffprobe)
-        assert bin is not None, f'ffprobe path {ffprobe} not found'
+        binary = shutil.which(ffprobe)
+        assert binary is not None, f'ffprobe path {ffprobe} not found'
+        args = [binary]
 
+        kwa = dict(self.FFPROBE_ARGS)
+        kwa.update(extra_args)
+        args += prepare_args(kwa, prefixes=('-', None), kvseps=(None, '='), lstsep=',')
 
-        args = [bin]
-         
+        args.append(str(videofile))
+        if is_log:
+            print(' '.join(args), file=sys.stderr)
+        out = sp.run(args, capture_output=True, text=True)
+        out.check_returncode()
 
+        res = json.loads(out.stdout)
+        return res
 
-    def probe(self):
+    def probe(self, *, is_reprobe = None):
         """Gets the information on a downloaded file using ffprobe"""
-        ...
+        # @TODO: add more processing
+        assert (isinstance(self.downloaded, pth.Path) and self.downloaded.exists()
+               ), 'Downloaded file does not exist'
+                
+        is_reprobe = is_reprobe if is_reprobe is not None else self.is_overwrite
+
+        if is_reprobe or self.info_downloaded is None:
+            self.info_downloaded = self._ffprobe_wrap(self.downloaded)
+
+        return self.info_downloaded
         
 
 def process(spec: VideoSpec):
@@ -229,4 +266,6 @@ if __name__ == '__main__':
         'outfile': 'IDEAS/preacher-curl.mp4',
         'builddir': 'IDEAS/videograb-tmp'
     }
-    spec = VideoSpec(**testspec)
+    spec = VideoSpec(**testspec, is_log=True)
+    dl, meta = spec.download()
+    probed = spec.probe()
