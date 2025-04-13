@@ -1,14 +1,62 @@
-"""Grabs videos from a remote source, cuts and processes them based on a spec."""
+"""Grabs videos from a remote source, cuts and processes them based on a spec.
+
+Dependencies: yt-dlp, ffmpeg, ffprobe (part of ffmpeg)
+"""
 
 from dataclasses import dataclass, field
 import json
 import pathlib as pth
+import shutil
+import subprocess as sp
 import tempfile
 from yt_dlp import YoutubeDL as YDL
 
 TOOL_NAME = pth.Path(__file__).stem
 
-@dataclass
+
+def prepare_args(dct: dict, *, prefixes=('-', None), kvseps=(None, '='), lstsep=','):
+    """Formats arguments according to spec.
+
+    Args:
+        prefixes: what to put before key at each hierarchy level,
+                  i.e. '--' means {'k': 'v'} will be '--k ...'
+        kvseps: separators to join keys and values at each level,
+                i.e. '=' means {'k': 'v'} will be '--k=v'.
+                None means keys and values need to be put as separate elements
+        lstsep: separator between value list,
+                i.e. ':' means ('coffee', 'is', 'good') becomes 'coffee:is:good'
+    """
+    def parse_level(data, level=0):
+        prefix = prefixes[level]
+        kvsep = kvseps[level]
+        
+        col = []
+
+        for k, v in data.items():
+            k = (prefix or '') + k
+
+            if isinstance(v, dict):     # here we go again
+                # sure could have done it with no recursion, but must be readable
+                subvals = parse_level(v, level + 1)
+                for sv in subvals:
+                    col += [k, sv] if kvsep is None else [k + kvsep + sv]
+                continue
+
+            if not isinstance(v, str):  # assume something iterable -> join it
+                v = lstsep.join(v)
+
+            if isinstance(v, str):
+                col += [k, v] if kvsep is None else [k + kvsep + v]
+                continue
+            
+            raise RuntimeError(f"Ewww, '{k}': '{v}'... What are you feeding me with?")
+
+        return col
+    
+    return parse_level(dct)
+
+
+
 class VideoSpec:
     url: str
     outfile: pth.Path
@@ -19,11 +67,23 @@ class VideoSpec:
     _tmpdir: tempfile.TemporaryDirectory | None = field(default=None, repr=False)
 
     # Whether to overwrite files. Class-level default
-    OVERWRITE: bool = field(default=False, repr=False)
+    OVERWRITE: bool = False
     # Template for json filenames
-    META_JSON_TPL: str = field(default='{name}.meta.json', repr=False)
+    META_JSON_TPL: str = '{name}.meta.json'
     # Downloaded file name
-    DOWNLOADED_TPL: str = field(default='{name}.dl.mkv', repr=False)
+    DOWNLOADED_TPL: str = '{name}.dl.mkv'
+
+    FFPROBE_PATH: pth.Path = pth.Path('ffprobe')
+
+    FFPROBE_ARGS: dict = {
+        'loglevel': 'error',        # filter-out unusable data
+        'print_format': 'json',     # we'll parse that
+        'select_streams': 'v',      # all video streams
+        'show_entries': {
+            'stream': ['width', 'height', 'avg_frame_rate', 'bit_rate'],
+            'format': ['bit_rate']
+        }
+    }
 
     def __init__(self, url: str, outfile: pth.Path | str,
                  builddir: pth.Path | str | None = None,
@@ -106,6 +166,14 @@ class VideoSpec:
 
 
     def download(self, *, is_overwrite: bool | None = None):
+        """Downloads raw video from a specified remote resource.
+
+        Args:
+            is_overwrite: Whether the video file should be overwriten.
+                Otherwise, if the downloaded video already exists, no actual
+                download is performed and the object state gets filled from
+                the exising files.
+        """
         is_overwrite = is_overwrite if is_overwrite is not None else self.OVERWRITE
 
         self._ensure_builddir()
@@ -128,6 +196,27 @@ class VideoSpec:
         self.get_metadata(is_set_own=True, is_overwrite=False)
         self.downloaded = dlout
         return dlout, jsonout
+    
+    @classmethod
+    def _ffprobe_wrap(cls, videofile: pth.Path | str):
+        """A wrapper to call ffprobe and get information on the video file."""
+        videofile = pth.Path(video)
+        assert videofile.exists(), f'File {videofile} not found'
+
+        # We need to use fully-qualified path to executable
+        # per https://docs.python.org/3/library/subprocess.html#subprocess.Popen
+        ffprobe = self.FFPROBE_PATH
+        bin = shutil.which(ffprobe)
+        assert bin is not None, f'ffprobe path {ffprobe} not found'
+
+
+        args = [bin]
+         
+
+
+    def probe(self):
+        """Gets the information on a downloaded file using ffprobe"""
+        ...
         
 
 def process(spec: VideoSpec):
