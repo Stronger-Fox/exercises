@@ -63,6 +63,45 @@ def prepare_args(dct: dict, *, prefixes=('-', None), kvseps=(None, '='), lstsep=
     
     return parse_level(dct)
 
+
+# Default arguments to ffprobe in form of an input to `prepare_args`
+FFPROBE_ARGS: dict = {
+    'loglevel': 'error',        # filter-out unusable data
+    'print_format': 'json',     # we'll parse that
+    # 'select_streams': 'v',      # only all video streams'
+    'show_entries': {
+        'stream': '',
+        'format': ''
+    }
+}
+
+def ffprobe_wrap(videofile: pth.Path | str, *,
+                 extra_args: dict = {}, is_verbose: bool = True,
+                 ffprobe_path: pth.Path | str = 'ffprobe'):
+    """A wrapper to call ffprobe and get information on the video file."""
+    videofile = pth.Path(videofile)
+    assert videofile.exists(), f'File {videofile} not found'
+
+    # We need to use fully-qualified path to executable
+    # per https://docs.python.org/3/library/subprocess.html#subprocess.Popen
+    ffprobe_bin = shutil.which(ffprobe_path)
+    assert ffprobe_bin is not None, f'ffprobe path {ffprobe_path} not found'
+    args = [ffprobe_bin]
+
+    kwa = dict(FFPROBE_ARGS)
+    kwa.update(extra_args)
+    args += prepare_args(kwa, prefixes=('-', None), kvseps=(None, '='), lstsep=',')
+
+    args.append(str(videofile))
+    if is_verbose:
+        print(' '.join(args), file=sys.stderr)
+    out = sp.run(args, capture_output=True, text=True)
+    out.check_returncode()
+
+    res = json.loads(out.stdout)
+    return res
+
+
 CUT_REGEXP = r'((?:\.{3})|(?:(?:\d+:)?(?:\d{0,2}:)?\d{0,2}\.?\d{0,3}))'
 CUT_REGEXP = re.compile(f'{CUT_REGEXP} - {CUT_REGEXP}')
 
@@ -136,7 +175,7 @@ class VideoSpec:
     downloaded: pth.Path | None = None
     info_downloaded: dict | None = None
 
-    is_log: bool = False
+    is_verbose: bool = False
 
     _tmpdir: tempfile.TemporaryDirectory | None = field(default=None, repr=False)
 
@@ -149,19 +188,11 @@ class VideoSpec:
 
     FFPROBE_PATH: pth.Path = pth.Path('ffprobe')
 
-    FFPROBE_ARGS: dict = {
-        'loglevel': 'error',        # filter-out unusable data
-        'print_format': 'json',     # we'll parse that
-        'select_streams': 'v',      # all video streams
-        'show_entries': {
-            'stream': '',
-            'format': ''
-        }
-    }
-
     def __init__(self, url: str, outfile: pth.Path | str,
                  builddir: pth.Path | str | None = None,
-                 *, is_overwrite: bool | None = None, is_log: bool | None = None):
+                 *,
+                 is_overwrite: bool | None = None,
+                 is_verbose: bool | None = None):
         """
         Args:
             url: Where to grab the video from
@@ -184,8 +215,8 @@ class VideoSpec:
 
         if is_overwrite is not None:    # otherwise use class-level default
             self.is_overwrite = is_overwrite
-        if is_log is not None:    # otherwise use class-level default
-            self.is_log = is_log
+        if is_verbose is not None:    # otherwise use class-level default
+            self.is_verbose = is_verbose
 
     @property
     def name(self):
@@ -277,46 +308,21 @@ class VideoSpec:
         self.get_metadata(is_set_own=True, is_overwrite=False)
         self.downloaded = dlout
         return dlout, jsonout
-    
-    # @TODO: extract into separate function
-    def _ffprobe_wrap(self, videofile: pth.Path | str, *,
-                      extra_args: dict = {}, is_log: bool = None):
-        """A wrapper to call ffprobe and get information on the video file."""
-        is_log = is_log if is_log is not None else self.is_log 
 
-        videofile = pth.Path(videofile)
-        assert videofile.exists(), f'File {videofile} not found'
-
-        # We need to use fully-qualified path to executable
-        # per https://docs.python.org/3/library/subprocess.html#subprocess.Popen
-        ffprobe = self.FFPROBE_PATH
-        binary = shutil.which(ffprobe)
-        assert binary is not None, f'ffprobe path {ffprobe} not found'
-        args = [binary]
-
-        kwa = dict(self.FFPROBE_ARGS)
-        kwa.update(extra_args)
-        args += prepare_args(kwa, prefixes=('-', None), kvseps=(None, '='), lstsep=',')
-
-        args.append(str(videofile))
-        if is_log:
-            print(' '.join(args), file=sys.stderr)
-        out = sp.run(args, capture_output=True, text=True)
-        out.check_returncode()
-
-        res = json.loads(out.stdout)
-        return res
-
-    def probe(self, *, is_reprobe = None):
+    def probe(self, *, extra_args: dict = {},
+              is_reprobe: bool | None = None, is_verbose: bool | None = None):
         """Gets the information on a downloaded file using ffprobe"""
         # @TODO: add more processing
         assert (isinstance(self.downloaded, pth.Path) and self.downloaded.exists()
                ), 'Downloaded file does not exist'
                 
         is_reprobe = is_reprobe if is_reprobe is not None else self.is_overwrite
+        is_verbose = is_verbose if is_verbose is not None else self.is_verbose
 
         if is_reprobe or self.info_downloaded is None:
-            self.info_downloaded = self._ffprobe_wrap(self.downloaded)
+            self.info_downloaded = ffprobe_wrap(self.downloaded,
+                                                extra_args=extra_args,
+                                                is_verbose=is_verbose)
 
         return self.info_downloaded
         
@@ -331,6 +337,6 @@ if __name__ == '__main__':
         'outfile': 'IDEAS/preacher-curl.mp4',
         'builddir': 'IDEAS/videograb-tmp'
     }
-    spec = VideoSpec(**testspec, is_log=True)
+    spec = VideoSpec(**testspec, is_verbose=True)
     dl, meta = spec.download()
     probed = spec.probe()
