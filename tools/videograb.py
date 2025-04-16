@@ -4,6 +4,7 @@ Dependencies: yt-dlp, ffmpeg, ffprobe (part of ffmpeg)
 """
 
 from dataclasses import dataclass, field
+import functools
 import json
 import pathlib as pth
 import re
@@ -14,98 +15,30 @@ import tempfile
 import typing as t
 from yt_dlp import YoutubeDL as YDL
 
+type AnyPath = pth.Path | str
+
 TOOL_NAME = pth.Path(__file__).stem
 
-
-def prepare_args(dct: dict, *, prefixes=('-', None), kvseps=(None, '='), lstsep=','):
-    """Formats arguments according to spec.
-
-    Args:
-        prefixes: what to put before key at each hierarchy level,
-                  i.e. '--' means {'k': 'v'} will be '--k ...'
-        kvseps: separators to join keys and values at each level,
-                i.e. '=' means {'k': 'v'} will be '--k=v'.
-                None means keys and values need to be put as separate elements
-        lstsep: separator between value list,
-                i.e. ':' means ('coffee', 'is', 'good') becomes 'coffee:is:good'
-    """
-    def parse_level(data, level=0):
-        prefix = prefixes[level]
-        kvsep = kvseps[level]
-        
-        col = []
-
-        for k, v in data.items():
-            k = (prefix or '') + k
-
-            if isinstance(v, dict):     # here we go again
-                # sure could have done it with no recursion, but must be readable
-                subvals = parse_level(v, level + 1)
-                for sv in subvals:
-                    col += [k, sv] if kvsep is None else [k + kvsep + sv]
-
-                continue
-
-            if isinstance(v, str) and not v:        # empty string -> just the key
-                col += [k]
-                continue
-
-            if not isinstance(v, str):  # assume something iterable -> join it
-                v = lstsep.join(v)
-
-            if isinstance(v, str):
-                col += [k, v] if kvsep is None else [k + kvsep + v]
-                continue
-            
-            raise RuntimeError(f"Ewww, '{k}': '{v}'... What are you feeding me with?")
-
-        return col
-    
-    return parse_level(dct)
-
-
-# Default arguments to ffprobe in form of an input to `prepare_args`
-FFPROBE_ARGS: dict = {
-    'loglevel': 'error',        # filter-out unusable data
-    'print_format': 'json',     # we'll parse that
-    # 'select_streams': 'v',      # only all video streams'
-    'show_entries': {
-        'stream': '',
-        'format': ''
-    }
-}
-
-def ffprobe_wrap(videofile: pth.Path | str, *,
-                 extra_args: dict = {}, is_verbose: bool = True,
-                 ffprobe_path: pth.Path | str = 'ffprobe'):
-    """A wrapper to call ffprobe and get information on the video file."""
-    videofile = pth.Path(videofile)
-    assert videofile.exists(), f'File {videofile} not found'
-
-    # We need to use fully-qualified path to executable
-    # per https://docs.python.org/3/library/subprocess.html#subprocess.Popen
-    ffprobe_bin = shutil.which(ffprobe_path)
-    assert ffprobe_bin is not None, f'ffprobe path {ffprobe_path} not found'
-    args = [ffprobe_bin]
-
-    kwa = dict(FFPROBE_ARGS)
-    kwa.update(extra_args)
-    args += prepare_args(kwa, prefixes=('-', None), kvseps=(None, '='), lstsep=',')
-
-    args.append(str(videofile))
-    if is_verbose:
-        print(' '.join(args), file=sys.stderr)
-    out = sp.run(args, capture_output=True, text=True)
-    out.check_returncode()
-
-    res = json.loads(out.stdout)
-    return res
-
-
+# What is used to split cut entries in `concat_format`
 CUT_REGEXP = r'((?:\.{3})|(?:(?:\d+:)?(?:\d{0,2}:)?\d{0,2}\.?\d{0,3}))'
 CUT_REGEXP = re.compile(f'{CUT_REGEXP} - {CUT_REGEXP}')
 
-def concat_format(videofile: pth.Path | str, cuts: t.Iterable[str], *,
+# Parses ffmpeg status line like the following into groups
+# 'frame=  109 fps=0.0 q=-0.0 size=N/A time=00:00:02.20 bitrate=N/A speed=4.41x    '
+# 'frame=  577 fps=0.0 q=-1.0 Lsize=   13053KiB time=00:00:20.08 bitrate=5322.7kbits/s speed= 338x    '
+FF_STATUS_RE = (r'^'
+    r'frame=\W*(?P<frame> \d+ )  \W'
+    r'fps=(?P<fps> \d+ .? \d* )  \W'
+    r'q=(?P<q> \-? \d+ .? \d* )  \W'
+    r'L?size=\W*(?P<size> (?:N/A) | \d+ \w? ) \w*   \W'     # 'K', 'M' suffix -> result
+    r'time=(?P<time> \d{2} \: \d{2} \: \d{2} \. \d{2} )  \W'
+    r'bitrate=(?P<bitrate> (?:N/A) | \d+ \.? \d* \w? ) [\w/]*  \W'  # 'k', 'm' suffix -> result
+    r'speed=\W*(?P<speed> \d+ \.? \d* ) x'
+    r'\W* $'     # they're always ending with 4 spaces
+)
+FF_STATUS_RE = re.compile(FF_STATUS_RE, flags=re.VERBOSE)
+
+def concat_format(videofile: AnyPath, cuts: t.Iterable[str], *,
                   is_add_header: bool = True) -> str:
     """Formats specified video cut fragments into ffmpeg concat demuxer format.
 
@@ -167,6 +100,166 @@ def concat_format(videofile: pth.Path | str, cuts: t.Iterable[str], *,
     return '\n'.join(lines)
 
 
+def prepare_args(dct: dict, *, prefixes=('-', None), kvseps=(None, '='), lstsep=','):
+    """Formats arguments according to spec.
+
+    Args:
+        prefixes: what to put before key at each hierarchy level,
+                  i.e. '--' means {'k': 'v'} will be '--k ...'
+        kvseps: separators to join keys and values at each level,
+                i.e. '=' means {'k': 'v'} will be '--k=v'.
+                None means keys and values need to be put as separate elements
+        lstsep: separator between value list,
+                i.e. ':' means ('coffee', 'is', 'good') becomes 'coffee:is:good'
+    """
+    def parse_level(data, level=0):
+        prefix = prefixes[level]
+        kvsep = kvseps[level]
+        
+        col = []
+
+        for k, v in data.items():
+            k = (prefix or '') + k
+
+            if isinstance(v, dict):     # here we go again
+                # sure could have done it with no recursion, but must be readable
+                subvals = parse_level(v, level + 1)
+                for sv in subvals:
+                    col += [k, sv] if kvsep is None else [k + kvsep + sv]
+
+                continue
+
+            if isinstance(v, str) and not v:        # empty string -> just the key
+                col += [k]
+                continue
+
+            if not isinstance(v, str):  # assume something iterable -> join it
+                v = lstsep.join(v)
+
+            if isinstance(v, str):
+                col += [k, v] if kvsep is None else [k + kvsep + v]
+                continue
+            
+            raise RuntimeError(f"Ewww, '{k}': '{v}'... What are you feeding me with?")
+
+        return col
+    
+    return parse_level(dct)
+
+
+def get_executable(executable: AnyPath) -> str:
+    """A small helper to get the executable name for running subprocess"""
+    executable = pth.Path(executable)
+    # We need to use fully-qualified path to executable
+    # per https://docs.python.org/3/library/subprocess.html#subprocess.Popen
+    bin = shutil.which(executable)
+    if bin is None:
+        raise RuntimeError(f'Executable {executable} path not found')
+    return bin
+
+
+# Default arguments to ffprobe in form of an input to `prepare_args`
+FFPROBE_ARGS: dict = {
+    'loglevel': 'error',        # filter-out unusable data
+    'print_format': 'json',     # we'll parse that
+    # 'select_streams': 'v',      # only all video streams'
+    'show_entries': {
+        'stream': '',
+        'format': ''
+    }
+}
+
+def ffprobe_wrap(videofile: AnyPath, *,
+                 extra_args: dict = {}, is_verbose: bool = True,
+                 ffprobe_path: AnyPath = 'ffprobe'):
+    """A wrapper to call ffprobe and get information on the video file."""
+    videofile = pth.Path(videofile)
+    assert videofile.exists(), f'File {videofile} not found'
+
+    args = [get_executable(ffprobe_path)]
+
+    kwa = dict(FFPROBE_ARGS)
+    kwa.update(extra_args)
+    args += prepare_args(kwa, prefixes=('-', None), kvseps=(None, '='), lstsep=',')
+
+    args.append(str(videofile))
+    if is_verbose:
+        print(' '.join(args), file=sys.stderr)
+    out = sp.run(args, capture_output=True, text=True)
+    out.check_returncode()
+
+    res = json.loads(out.stdout)
+    return res
+
+
+FFMPEG_PRE_ARGS = {
+    'hide_banner': '', 
+    'hwaccel': 'auto'
+}
+
+FFMPEG_ARGS_GET_LOUDNORM = {
+    'ac': '1',
+    'af': ['loudnorm', 'print_format', 'json'],
+    'f': 'null',
+    '': ''
+}
+def ffmpeg_wrap(infile: AnyPath, *, args: dict,
+                outfile: AnyPath | None = None,
+                pre_args: dict = FFMPEG_PRE_ARGS,
+                is_verbose: bool = True,
+                ffmpeg_path: AnyPath = 'ffmpeg'):
+    """Wraps an ffmpeg subrocess call.
+
+    Args:
+        args: ffmpeg arguments (in `prepare_args()` format),
+            to be placed *after* the `infile`
+        outfile: Output file (optional, but usually needed)
+        pre_args: Arguments to ffmpeg *before* the `infile`
+        is_verbose: optional flag, whether to echo ffmpeg output
+        ffmpeg_path: optional path to ffmpeg binary
+    """
+    pargs = [get_executable(ffmpeg_path)]
+
+    prepare = functools.partial(prepare_args,
+        prefixes=('-', None), kvseps=(None, '='), lstsep='=')
+
+    pargs += prepare(pre_args)      # formatted args before the input file
+    pargs += ['-i', str(infile)]    # input file itself
+    pargs += prepare(args)          # and after the file
+    if outfile is not None:
+        pargs += [str(outfile)]  # output goes last
+    
+    if is_verbose:
+        print(' '.join(pargs), file=sys.stderr)
+    
+    #stderr = sys.stderr if is_verbose else None
+    proc = sp.Popen(pargs, stdout=sp.PIPE, stderr=sp.PIPE, text=True)
+
+    # 'frame=  109 fps=0.0 q=-0.0 size=N/A time=00:00:02.20 bitrate=N/A speed=4.41x    '
+    out, err = proc.communicate()
+    return proc, out, err
+
+# @TODO: implement this
+def extract_loudnorm():
+    ...
+    '''
+    '[Parsed_loudnorm_0 @ 0x7c7454002680] ',
+    '{',
+    '\t"input_i" : "-19.12",',
+    '\t"input_tp" : "-1.82",',
+    '\t"input_lra" : "13.60",',
+    '\t"input_thresh" : "-29.79",',
+    '\t"output_i" : "-25.78",',
+    '\t"output_tp" : "-9.72",',
+    '\t"output_lra" : "5.60",',
+    '\t"output_thresh" : "-35.92",',
+    '\t"normalization_type" : "dynamic",',
+    '\t"target_offset" : "1.78"',
+    '}',
+    '[out#0/null @ 0x5a6d9e9c7bc0] video:288KiB audio:10493KiB subtitle:0KiB other streams:0KiB global headers:0KiB muxing overhead: unknown'
+    '''
+    
+
 class VideoSpec:
     url: str
     outfile: pth.Path
@@ -188,8 +281,8 @@ class VideoSpec:
 
     FFPROBE_PATH: pth.Path = pth.Path('ffprobe')
 
-    def __init__(self, url: str, outfile: pth.Path | str,
-                 builddir: pth.Path | str | None = None,
+    def __init__(self, url: str, outfile: AnyPath,
+                 builddir: AnyPath | None = None,
                  *,
                  is_overwrite: bool | None = None,
                  is_verbose: bool | None = None):
@@ -325,7 +418,9 @@ class VideoSpec:
                                                 is_verbose=is_verbose)
 
         return self.info_downloaded
-        
+    
+    def cut(self):
+        ...
 
 def process(spec: VideoSpec):
     ...
