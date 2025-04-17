@@ -6,10 +6,12 @@ Dependencies: yt-dlp, ffmpeg, ffprobe (part of ffmpeg)
 from dataclasses import dataclass, field
 import functools
 import io
+import inspect
 import itertools
 import json
 import pathlib as pth
 import re
+import reprlib
 import shutil
 import subprocess as sp
 import sys
@@ -347,12 +349,15 @@ def extract_loudnorm():
     
 
 class VideoSpec:
+    name: str   # property to get names based on outfile name set
+
     url: str
     outfile: pth.Path
     builddir: pth.Path
     metadata: dict | None = None    # @FIXME: avoid very long output via repr
-    downloaded: pth.Path | None = None
-    info_downloaded: dict | None = None
+    downloaded: pth.Path | None = None      # result after downloading
+    downloaded_info: dict | None = None     # ffprobed info on downloaded file
+    merged: pth.Path | None = None          # result after cutting
 
     is_verbose: bool = False
 
@@ -360,10 +365,12 @@ class VideoSpec:
 
     # Whether to overwrite files. Class-level default
     is_overwrite: bool = False
-    # Template for json filenames
-    META_JSON_TPL: str = '{name}.meta.json'
-    # Downloaded file name
-    DOWNLOADED_TPL: str = '{name}.dl.mkv'
+    
+    TEMPLATES = {
+        'meta_json':  '{name}.meta.json',   # Template for json filenames
+        'downloaded': '{name}.dl.mkv',      # Downloaded file name
+        'merged':     '{name}.merged.mkv'   # Name of file after cut & merge
+    }
 
     FFPROBE_PATH: pth.Path = pth.Path('ffprobe')
 
@@ -387,10 +394,11 @@ class VideoSpec:
             builddir.mkdir(exist_ok=True)       # create if doesn't exist
             self.builddir = builddir
             
-            # set downloaded as well if found
-            dlpath = builddir.joinpath(self.downloaded_name)
-            if dlpath.exists():
-                self.downloaded = dlpath
+            # set downloaded and cut paths as well if found
+            for field in self.TEMPLATES:
+                path = builddir.joinpath(self._filename_for(field))
+                if path.exists():
+                    setattr(self, field, path)
 
         if is_overwrite is not None:    # otherwise use class-level default
             self.is_overwrite = is_overwrite
@@ -401,19 +409,33 @@ class VideoSpec:
     def name(self):
         return self.outfile.stem
     
-    @property
-    def meta_json_name(self):
-        return self.META_JSON_TPL.format(name=self.name)
-    
-    @property
-    def downloaded_name(self):
-        return self.DOWNLOADED_TPL.format(name=self.name)
+    def _filename_for(self, fieldname: str):
+        """A helper to get a formatted filename for entries out of TEMPLATES"""
+        tpl = self.TEMPLATES[fieldname]
+        return tpl.format(name=self.name)
 
     def _ensure_builddir(self):
         if self.builddir is None:
             prefix = f'{TOOL_NAME}_{self.name}_'
             self._tmpdir = tempfile.TemporaryDirectory(prefix=prefix)
             self.builddir = pth.Path(self._tmpdir.name)
+    
+    def __repr__(self):     # do things ourselves
+        fields = inspect.get_annotations(type(self))
+        fields = {k: getattr(self, k) for k in fields
+                  if not k.startswith('_') and not k.isupper()}
+        # translate paths to str
+        res = {k: str(v) if isinstance(v, pth.Path) else v
+               for k, v in fields.items()}
+        # long names come short
+        long = {field: '{...}' if res[field] else repr(res[field])
+                for field in ['metadata', 'downloaded_info']}
+
+        formatted = [(f'{k}={v!r}' if k not in long else f'{k}={long[k]}')
+                     for k, v in res.items()]
+        res = ', '.join(formatted)
+        return f'{type(self).__name__}({res})'
+
 
     def get_metadata(self, *, shorten: bool = True, is_set_own: bool = True,
                      is_overwrite: bool | None = None):
@@ -427,7 +449,7 @@ class VideoSpec:
         """
 
         is_overwrite = is_overwrite if is_overwrite is not None else self.is_overwrite
-        json_name = self.meta_json_name
+        json_name = self._filename_for('meta_json')
         json_path = (self.builddir is not None and self.builddir.joinpath(json_name))
         
         # Try getting it from build directory if possible
@@ -470,8 +492,8 @@ class VideoSpec:
         self._ensure_builddir()
         
         # where to put downloaded file
-        dlout = self.builddir.joinpath(self.downloaded_name)
-        jsonout = self.builddir.joinpath(self.meta_json_name)
+        dlout = self.builddir.joinpath(self._filename_for('downloaded'))
+        jsonout = self.builddir.joinpath(self._filename_for('meta_json'))
 
         if not dlout.exists() or is_overwrite:
             cfg = {     # --print-to-file "%()j" outfile.meta.json -o "outfile.dl.mkv"
@@ -498,12 +520,12 @@ class VideoSpec:
         is_reprobe = is_reprobe if is_reprobe is not None else self.is_overwrite
         is_verbose = is_verbose if is_verbose is not None else self.is_verbose
 
-        if is_reprobe or self.info_downloaded is None:
-            self.info_downloaded = ffprobe_wrap(self.downloaded,
-                                                extra_args=extra_args,
-                                                is_verbose=is_verbose)
+        if is_reprobe or self.downloaded_info is None:
+            self.downloaded_info = ffprobe_wrap(self.downloaded,
+                                                  extra_args=extra_args,
+                                                  is_verbose=is_verbose)
 
-        return self.info_downloaded
+        return self.downloaded_info
     
     def cut(self):
         ...
