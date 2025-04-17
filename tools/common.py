@@ -65,3 +65,42 @@ class IDMap(MutableMapping):
         inner = repr(self.lookup)
         fld = f'attr={self.attr!r}'
         return f'{cls}({fld}, {inner})'
+
+# now unused, maybe will find its use somewhere later
+class TeeIOWriter:
+    """Tees writes across different io buffers.
+
+    All other attribute lookups are passed to main writer
+    """
+
+    def __init__(self, main, *others):
+        self.main = main
+        self.writers = (main, ) + others
+
+    def write(self, data):
+        for writer in self.writers:
+            writer.write(data)
+
+    def flush(self):
+        for writer in self.writers:
+            writer.flush()
+    
+    def close(self):
+        for writer in self.writers:
+            writer.close()
+    
+    def __getattr__(self, attr):
+        return self.main.__getattr__(attr)
+    
+    # have to provide these as well, as they're always looked at class-level
+    def __iter__(self):
+        return self.main.__iter__()
+    
+    def __next__(self):
+        return self.main.__next__()
+    
+    def __enter__(self):
+        return self.main.__enter__()
+    
+    def __exit__(self, exc_type=None, exc_value=None, traceback=None):
+        return self.main.__exit__(exc_type, exc_value, traceback)

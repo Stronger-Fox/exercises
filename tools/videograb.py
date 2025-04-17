@@ -5,6 +5,8 @@ Dependencies: yt-dlp, ffmpeg, ffprobe (part of ffmpeg)
 
 from dataclasses import dataclass, field
 import functools
+import io
+import itertools
 import json
 import pathlib as pth
 import re
@@ -37,6 +39,44 @@ FF_STATUS_RE = (r'^'
     r'\W* $'     # they're always ending with 4 spaces
 )
 FF_STATUS_RE = re.compile(FF_STATUS_RE, flags=re.VERBOSE)
+def ffmpeg_parse_status(line: str) -> dict | None:
+    """Parse ffmpeg output line, trying to get status from it.
+
+    Returns:
+        A dict filled with properly formatted status entries.
+        None if status information was not found in the line
+    """
+    match = FF_STATUS_RE.match(line)
+    if match is None:
+        return None
+    res = match.groupdict()
+    
+    # replace 'N/A' with None
+    res = {k: (None if v == 'N/A' else v) for k, v in res.items()}
+
+    # all suffixes to bits and bytes
+    for field, is_bytes in [['size', True], ['bitrate', False]]:
+        if res[field] is None:
+            continue
+        # split out multiplier and value
+        mul = ''.join([c for c in res[field] if not c.isdigit()])
+        lookup = [
+            {'': 1, 'k': 1000, 'm': 1000 * 1000, 'g': 1000 * 1000 * 1000},
+            {'': 1, 'k': 1024, 'm': 1024 * 1024, 'g': 1024 * 1024 * 1024}
+        ]
+        mul = lookup[is_bytes][mul.tolower()]
+        val = int(res[field].replace(mul, ''))
+        res[field] = val * mul
+    
+    # convert other numeric values as well
+    for field in 'frame', 'fps', 'q', 'speed':
+        if res[field] is None:
+            continue
+        conv = int if field == 'frame' else float
+        res[field] = conv(res[field])
+    
+    return res
+
 
 def concat_format(videofile: AnyPath, cuts: t.Iterable[str], *,
                   is_add_header: bool = True) -> str:
@@ -192,6 +232,32 @@ def ffprobe_wrap(videofile: AnyPath, *,
     return res
 
 
+def sp_lines_iter(proc: sp.Popen, *, poll_s: int | None, proc_stream: io.TextIOBase | str):
+    if proc_stream in ['stout', 'stderr']:
+        proc_stream = getattr(proc, proc_stream)
+
+    while True:
+        try:
+            proc.wait(poll_s)
+        except sp.TimeoutExpired:
+            pass
+        else:   # process terminated
+            yield from proc_stream      # residual lines
+            return         # end iteration
+        
+        # current lines
+        yield from proc_stream
+
+def ffmpeg_progress_iter(lines, outbuf):
+    for line in lines:
+        status = ffmpeg_parse_status(line)
+        if status is None:
+            outbuf.write(line)
+            continue
+        
+        # reached status line, output it as progress
+        yield status
+
 FFMPEG_PRE_ARGS = {
     'hide_banner': '', 
     'hwaccel': 'auto'
@@ -207,7 +273,8 @@ def ffmpeg_wrap(infile: AnyPath, *, args: dict,
                 outfile: AnyPath | None = None,
                 pre_args: dict = FFMPEG_PRE_ARGS,
                 is_verbose: bool = True,
-                ffmpeg_path: AnyPath = 'ffmpeg'):
+                ffmpeg_path: AnyPath = 'ffmpeg',
+                poll_interval_ms: int = 100):
     """Wraps an ffmpeg subrocess call.
 
     Args:
@@ -217,6 +284,13 @@ def ffmpeg_wrap(infile: AnyPath, *, args: dict,
         pre_args: Arguments to ffmpeg *before* the `infile`
         is_verbose: optional flag, whether to echo ffmpeg output
         ffmpeg_path: optional path to ffmpeg binary
+    Note:
+        Output buffer is designed to contain raw ffmpeg log output without
+        the progress lines.
+        It gets filled with initial ffmpeg output, before the progress lines
+        and is guaranteed to have that data at call return.
+        But to get any further data into that buffer, the output iterator
+        needs to be consumed.
     """
     pargs = [get_executable(ffmpeg_path)]
 
@@ -232,12 +306,24 @@ def ffmpeg_wrap(infile: AnyPath, *, args: dict,
     if is_verbose:
         print(' '.join(pargs), file=sys.stderr)
     
-    #stderr = sys.stderr if is_verbose else None
-    proc = sp.Popen(pargs, stdout=sp.PIPE, stderr=sp.PIPE, text=True)
+    proc = sp.Popen(pargs, stderr=sp.PIPE, text=True)
 
-    # 'frame=  109 fps=0.0 q=-0.0 size=N/A time=00:00:02.20 bitrate=N/A speed=4.41x    '
-    out, err = proc.communicate()
-    return proc, out, err
+    line_ix = sp_lines_iter(proc, poll_s=poll_interval_ms / 1000.0,
+                                  proc_stream=proc.stderr)
+
+    # Get all data before ffmpeg starts spitting its progress
+
+    # This will store results, having all progress lines filtered-out
+    outbuf = io.StringIO()          # Fast buffer without line wrapping
+
+    progress_ix = ffmpeg_progress_iter(line_ix, outbuf)
+    firststatus = next(progress_ix)     # advance iter to the first progress item
+
+    # reconstruct iter, with 1st item back in place
+    progress_ix = itertools.chain([firststatus], progress_ix)
+
+    return proc, progress_ix, outbuf
+
 
 # @TODO: implement this
 def extract_loudnorm():
